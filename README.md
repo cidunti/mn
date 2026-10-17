@@ -1,115 +1,115 @@
 -- ============================================================
--- MONITOR 100KB/s - loadstring/load (mobile-safe)
--- Salva em pedaços a 100 KB por segundo e mostra % no título.
--- Botões: Copiar (última captura) e Salvar (força gravação).
--- Permite a execução do loadstring/load original.
+-- MONITOR V4 (Xeno compatible) + captura Luraph multi-estágio
+-- Menu do v4 + hook de loadstring/load escondido do Luraph
 -- ============================================================
 
 local CAPTURED = {}
-local PREVIEWS = {}
-local LAST_CAPTURE = nil   -- última string capturada (código completo)
 local N = 0
+local WRITING = false
 local FILE_COUNT = 0
-local MAX_PREVIEW = 1500
+local MAX_PREVIEW = 2000
+local LAST_FULL = nil
 local HOOKED = {}
 
-local CHUNK_BYTES = 100 * 1024   -- 100 KB por segundo
+-- ===== 1. GUI (PlayerGui para Xeno) =====
+local parent
+do
+    if type(gethui) == "function" then
+        local ok, r = pcall(gethui)
+        if ok and r then parent = r end
+    end
+    if not parent then
+        local ok, r = pcall(function()
+            return game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui", 5)
+        end)
+        if ok and r then parent = r end
+    end
+    if not parent then
+        local ok, r = pcall(function()
+            return game:GetService("CoreGui")
+        end)
+        if ok and r then parent = r end
+    end
+end
 
-local unpackFn = table.unpack or unpack
-
--- ---------- GUI ----------
-local parent = (type(gethui) == "function" and select(2, pcall(gethui)))
-    or game:GetService("CoreGui")
+if not parent then
+    warn("[Monitor] sem parent de GUI")
+    return
+end
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "Monitor100KB"
+gui.Name = "MonitorV4"
 gui.ResetOnSpawn = false
 gui.DisplayOrder = 999
 gui.IgnoreGuiInset = true
 gui.Parent = parent
 
 local frm = Instance.new("Frame")
-frm.Size = UDim2.new(0, 320, 0, 240)
-frm.Position = UDim2.new(0.5, -160, 0.5, -120)
+frm.Size = UDim2.new(0, 480, 0, 360)
+frm.Position = UDim2.new(0.5, -240, 0.5, -180)
 frm.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
 frm.BorderSizePixel = 0
 frm.Active = true
 frm.Draggable = true
 frm.Parent = gui
-Instance.new("UICorner", frm).CornerRadius = UDim.new(0, 6)
+Instance.new("UICorner", frm).CornerRadius = UDim.new(0, 8)
 
 local bar = Instance.new("Frame")
-bar.Size = UDim2.new(1, 0, 0, 26)
+bar.Size = UDim2.new(1, 0, 0, 32)
 bar.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
 bar.BorderSizePixel = 0
 bar.Parent = frm
-Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 6)
+Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 8)
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -120, 1, 0)
-title.Position = UDim2.new(0, 6, 0, 0)
+title.Size = UDim2.new(1, -130, 1, 0)
+title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "Monitor | 0%"
+title.Text = "Monitor v4 | 0"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.Font = Enum.Font.GothamBold
-title.TextSize = 11
+title.TextSize = 12
 title.TextXAlignment = Enum.TextXAlignment.Left
-title.TextTruncate = Enum.TextTruncate.AtEnd
 title.Parent = bar
 
 local btnCopy = Instance.new("TextButton")
-btnCopy.Size = UDim2.new(0, 52, 0, 18)
-btnCopy.Position = UDim2.new(1, -80, 0, 4)
+btnCopy.Size = UDim2.new(0, 90, 0, 22)
+btnCopy.Position = UDim2.new(1, -118, 0, 5)
 btnCopy.BackgroundColor3 = Color3.fromRGB(60, 130, 210)
 btnCopy.Text = "Copiar"
 btnCopy.TextColor3 = Color3.new(1, 1, 1)
 btnCopy.Font = Enum.Font.GothamBold
-btnCopy.TextSize = 9
+btnCopy.TextSize = 11
 btnCopy.BorderSizePixel = 0
 btnCopy.Parent = bar
-Instance.new("UICorner", btnCopy).CornerRadius = UDim.new(0, 3)
+Instance.new("UICorner", btnCopy).CornerRadius = UDim.new(0, 4)
 
 local btnClose = Instance.new("TextButton")
-btnClose.Size = UDim2.new(0, 18, 0, 18)
-btnClose.Position = UDim2.new(1, -24, 0, 4)
+btnClose.Size = UDim2.new(0, 22, 0, 22)
+btnClose.Position = UDim2.new(1, -28, 0, 5)
 btnClose.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-btnClose.Text = "×"
+btnClose.Text = "X"
 btnClose.TextColor3 = Color3.new(1, 1, 1)
 btnClose.Font = Enum.Font.GothamBold
 btnClose.TextSize = 11
 btnClose.BorderSizePixel = 0
 btnClose.Parent = bar
-Instance.new("UICorner", btnClose).CornerRadius = UDim.new(0, 3)
-
-local progBg = Instance.new("Frame")
-progBg.Size = UDim2.new(1, -8, 0, 4)
-progBg.Position = UDim2.new(0, 4, 0, 27)
-progBg.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-progBg.BorderSizePixel = 0
-progBg.Parent = frm
-Instance.new("UICorner", progBg).CornerRadius = UDim.new(0, 2)
-
-local progFill = Instance.new("Frame")
-progFill.Size = UDim2.new(0, 0, 1, 0)
-progFill.BackgroundColor3 = Color3.fromRGB(60, 170, 90)
-progFill.BorderSizePixel = 0
-progFill.Parent = progBg
-Instance.new("UICorner", progFill).CornerRadius = UDim.new(0, 2)
+Instance.new("UICorner", btnClose).CornerRadius = UDim.new(0, 4)
 
 local scroll = Instance.new("ScrollingFrame")
-scroll.Size = UDim2.new(1, -8, 1, -38)
-scroll.Position = UDim2.new(0, 4, 0, 34)
+scroll.Size = UDim2.new(1, -12, 1, -44)
+scroll.Position = UDim2.new(0, 6, 0, 38)
 scroll.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
 scroll.BorderSizePixel = 0
 scroll.ScrollBarThickness = 4
 scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 scroll.Parent = frm
-Instance.new("UICorner", scroll).CornerRadius = UDim.new(0, 3)
+Instance.new("UICorner", scroll).CornerRadius = UDim.new(0, 4)
 
 local txt = Instance.new("TextBox")
-txt.Size = UDim2.new(1, -4, 1, 0)
-txt.Position = UDim2.new(0, 2, 0, 0)
+txt.Size = UDim2.new(1, -8, 0, 24)
+txt.Position = UDim2.new(0, 4, 0, 4)
 txt.BackgroundTransparency = 1
 txt.Text = "(aguardando...)"
 txt.TextColor3 = Color3.fromRGB(200, 230, 200)
@@ -122,192 +122,217 @@ txt.TextYAlignment = Enum.TextYAlignment.Top
 txt.ClearTextOnFocus = false
 txt.Parent = scroll
 
--- ---------- progresso ----------
-local PROG = { total = 0, done = 0, lastShown = -1, name = "" }
-
-local function setProgress(pct)
-    pct = math.clamp(math.floor(pct), 0, 100)
-    if pct == PROG.lastShown then return end
-    PROG.lastShown = pct
-    title.Text = "Monitor | " .. PROG.name .. " " .. pct .. "%"
-    progFill.Size = UDim2.new(pct / 100, 0, 1, 0)
+-- ===== 2. helpers =====
+local function refresh()
+    txt.Text = (#CAPTURED > 0) and table.concat(CAPTURED, "\n\n") or "(aguardando...)"
+    title.Text = "Monitor v4 | " .. N
 end
 
-local function doRefresh()
-    local lines = {}
-    for _, entry in ipairs(CAPTURED) do lines[#lines + 1] = entry end
-    for _, p in ipairs(PREVIEWS) do lines[#lines + 1] = p end
-    txt.Text = (#lines > 0) and table.concat(lines, "\n\n") or "(aguardando...)"
+local function cap(tag, body)
+    N = N + 1
+    table.insert(CAPTURED, "[#" .. N .. "] " .. tag .. "\n" .. tostring(body))
+    pcall(refresh)
+    pcall(print, "[#" .. N .. "] " .. tag)
 end
 
--- ---------- escrita com ritmo 100 KB/s ----------
-local function openFile(name)
-    FILE_COUNT = FILE_COUNT + 1
-    return string.format("Monitor100KB_%s_%03d.txt",
-        tostring(name):gsub("[^%w_%-]", "_"), FILE_COUNT)
-end
-
-local function writeChunk(path, chunk, isFirst)
-    local wf, af, rf = writefile, appendfile, readfile
-    if type(wf) ~= "function" then return false, "writefile indisponível" end
-
-    if isFirst then
-        return pcall(wf, path, chunk)
-    end
-    if type(af) == "function" then
-        return pcall(af, path, chunk)
-    end
-    if type(rf) == "function" then
-        local ok, prev = pcall(rf, path)
-        if ok and type(prev) == "string" then
-            return pcall(wf, path, prev .. chunk)
-        end
-    end
-    return pcall(wf, path, chunk)
-end
-
--- Salva o código em pedaços de 100 KB, esperando 1s entre eles
--- (ritmo de 100 KB por segundo).
-local function saveAt100KBs(name, src)
-    local total = #src
-    PROG.name = name
-    PROG.total = total
-    PROG.done = 0
-    PROG.lastShown = -1
-    setProgress(0)
-
-    local path = openFile(name)
-    local i = 1
-    local first = true
-    local saved = 0
-
-    while i <= total do
-        local j = math.min(i + CHUNK_BYTES - 1, total)
-        local chunk = src:sub(i, j)
-
-        local ok, err = writeChunk(path, chunk, first)
-        first = false
-
-        if not ok then
-            CAPTURED[#CAPTURED + 1] = "SAVE ERRO: " .. tostring(err)
-            return path, saved
-        end
-
-        saved = saved + #chunk
-        PROG.done = j
-        setProgress((PROG.done / total) * 100)
-
-        -- espera 1 segundo entre os pedaços (100 KB/s)
-        if j < total and task and task.wait then
-            task.wait(1)
-        end
-
-        i = j + 1
-    end
-
-    setProgress(100)
-    CAPTURED[#CAPTURED + 1] = "SALVO: " .. path .. " (" .. total .. " bytes)"
-    return path, saved
-end
-
--- ---------- hook ----------
-local function hook(env, envName, fname)
-    local orig = rawget(env, fname)
-    if type(orig) ~= "function" then return end
-    if HOOKED[orig] then return end
-    HOOKED[orig] = true
-
-    local function wrapper(source, ...)
-        local st = type(source)
-        local s = tostring(source)
-
-        N = N + 1
-        CAPTURED[#CAPTURED + 1] = "[#" .. N .. "] " .. envName .. "." .. fname
-            .. " | " .. st .. " | " .. #s .. " bytes"
-
-        if st == "string" and #s > 0 then
-            -- guarda o código completo para o botão Copiar
-            LAST_CAPTURE = s
-
-            -- salva em pedaços de 100 KB/s
-            local path = saveAt100KBs(fname, s)
-
-            -- prévia curta no painel
-            PREVIEWS[1] = "[ÚLTIMA PRÉVIA] " .. fname
-                .. " | " .. #s .. " bytes\n"
-                .. s:sub(1, MAX_PREVIEW)
-                .. (#s > MAX_PREVIEW and "\n[arquivo completo: " .. tostring(path) .. "]" or "")
-            pcall(doRefresh)
-        end
-
-        -- executa o original normalmente
-        local args = { ... }
-        local n = select("#", ...)
-        local results = { n = n, pcall(orig, source, unpackFn(args, 1, n)) }
-
-        if results[1] then
-            return unpackFn(results, 2, results.n + 1)
-        end
-        error(results[2], 0)
-    end
-
-    if type(hookfunction) == "function" then
-        local ok = pcall(hookfunction, orig, wrapper)
-        if ok then
-            CAPTURED[#CAPTURED + 1] = "HOOK: " .. envName .. "." .. fname .. " (permitido)"
-            return
-        end
-    end
-    local ok = pcall(function() env[fname] = wrapper end)
-    CAPTURED[#CAPTURED + 1] = "HOOK: " .. envName .. "." .. fname
-        .. (ok and " (permitido)" or " (falhou)")
-end
-
--- ---------- ambientes ----------
-local ENVS = {}
-local seen = {}
-local function addEnv(e, n)
-    if type(e) == "table" and not seen[e] then
-        seen[e] = true
-        ENVS[#ENVS + 1] = { env = e, name = n }
-    end
-end
-
-addEnv(_G, "_G")
-pcall(function() if type(getgenv) == "function" then addEnv(getgenv(), "getgenv") end end)
-pcall(function() if type(getfenv) == "function" then addEnv(getfenv(), "getfenv") end end)
-
-CAPTURED[#CAPTURED + 1] = "INIT: " .. #ENVS .. " ambiente(s)"
-
-for _, e in ipairs(ENVS) do
-    hook(e.env, e.name, "loadstring")
-    hook(e.env, e.name, "load")
-end
-
-CAPTURED[#CAPTURED + 1] = "STATUS: pronto. Execute o script alvo."
-doRefresh()
-
--- ---------- botões ----------
 btnCopy.MouseButton1Click:Connect(function()
-    if type(LAST_CAPTURE) ~= "string" then
-        btnCopy.Text = "Vazio"
-        task.delay(1.5, function()
-            if btnCopy.Parent then btnCopy.Text = "Copiar" end
-        end)
-        return
-    end
-
+    local target = LAST_FULL or table.concat(CAPTURED, "\n\n")
     local ok = false
     if type(setclipboard) == "function" then
-        ok = pcall(setclipboard, LAST_CAPTURE)
+        ok = pcall(setclipboard, target)
     elseif type(toclipboard) == "function" then
-        ok = pcall(toclipboard, LAST_CAPTURE)
+        ok = pcall(toclipboard, target)
     end
-
     btnCopy.Text = ok and "OK!" or "N/D"
     task.delay(1.5, function()
         if btnCopy.Parent then btnCopy.Text = "Copiar" end
     end)
 end)
 
-btnClose.MouseButton1Click:Connect(function() gui:Destroy() end)
+btnClose.MouseButton1Click:Connect(function()
+    pcall(function() gui:Destroy() end)
+end)
+
+-- ===== 3. HTTP hooks (v4) =====
+local function describeRequest(opts)
+    local url, body = "?", ""
+    if type(opts) == "string" then
+        url = opts
+    elseif type(opts) == "table" then
+        pcall(function() url = opts.Url or opts.url or opts.URL or opts[1] or "?" end)
+        pcall(function() body = opts.Body or opts.body or "" end)
+        if body == "" then
+            pcall(function() body = game:GetService("HttpService"):JSONEncode(opts) end)
+        end
+    end
+    return tostring(url), tostring(body)
+end
+
+local function describeResponse(result)
+    if type(result) == "table" then
+        local b
+        pcall(function() b = result.Body or result.body end)
+        if b ~= nil then return tostring(b) end
+        local ok, enc = pcall(function()
+            return game:GetService("HttpService"):JSONEncode(result)
+        end)
+        if ok then return enc end
+    end
+    return tostring(result)
+end
+
+local function hookRequest(env, envName, fname)
+    local orig = rawget(env, fname)
+    if type(orig) ~= "function" then return end
+    if HOOKED[orig] then return end
+    HOOKED[orig] = true
+
+    local function wrapper(...)
+        local url, body = describeRequest(select(1, ...))
+        cap(envName .. "." .. fname, "URL: " .. url .. "\nBODY: " .. body:sub(1, 800))
+
+        local ok, result = pcall(orig, ...)
+        if ok then
+            cap(envName .. "." .. fname .. " >> RESP", describeResponse(result):sub(1, 2000))
+            return result
+        end
+        cap(envName .. "." .. fname .. " >> ERRO", tostring(result))
+        error(result, 0)
+    end
+
+    if type(hookfunction) == "function" then
+        local ok = pcall(hookfunction, orig, wrapper)
+        if ok then return end
+    end
+    pcall(function() env[fname] = wrapper end)
+end
+
+local ENVS, SEEN = {}, {}
+local function addEnv(e, n)
+    if type(e) == "table" and not SEEN[e] then
+        SEEN[e] = true
+        ENVS[#ENVS + 1] = { env = e, name = n }
+    end
+end
+
+addEnv(_G, "_G")
+pcall(function() if type(getfenv) == "function" then addEnv(getfenv(), "getfenv") end end)
+pcall(function() if type(getgenv) == "function" then addEnv(getgenv(), "getgenv") end end)
+
+for _, e in ipairs(ENVS) do
+    for _, fname in ipairs({"request", "http_request", "syn_request", "httpRequest"}) do
+        pcall(hookRequest, e.env, e.name, fname)
+    end
+    for _, tname in ipairs({"syn", "http"}) do
+        local t = rawget(e.env, tname)
+        if type(t) == "table" then
+            for _, fname in ipairs({"request", "http_request"}) do
+                pcall(hookRequest, t, e.name .. "." .. tname, fname)
+            end
+        end
+    end
+end
+
+if type(hookfunction) == "function" then
+    for _, m in ipairs({"HttpGet", "HttpGetAsync"}) do
+        pcall(function()
+            local orig = game[m]
+            if type(orig) ~= "function" or HOOKED[orig] then return end
+            HOOKED[orig] = true
+            hookfunction(orig, function(self, url, ...)
+                cap("game." .. m, "URL: " .. tostring(url))
+                local ok, res = pcall(orig, self, url, ...)
+                if ok then
+                    cap("game." .. m .. " >> RESP", tostring(res):sub(1, 2000))
+                    return res
+                end
+                cap("game." .. m .. " >> ERRO", tostring(res))
+                error(res, 0)
+            end)
+        end)
+    end
+end
+
+-- ===== 4. writefile =====
+if type(writefile) == "function" then
+    local orig = writefile
+    writefile = function(path, content)
+        if not WRITING then
+            cap("writefile", "PATH: " .. tostring(path) .. "\nCONTEUDO: " .. tostring(content):sub(1, 500))
+        end
+        return orig(path, content)
+    end
+end
+
+-- ===== 5. loadstring / load multi-estágio (Luraph) =====
+local function saveStage(name, src)
+    if type(src) ~= "string" or #src == 0 then return nil end
+    if type(writefile) ~= "function" then return nil end
+    FILE_COUNT = FILE_COUNT + 1
+    local safe = tostring(name):gsub("[^%w_%-]", "_")
+    local path = string.format("MonitorV4_%s_%02d_%d.txt", safe, FILE_COUNT, os.time())
+    local prev = WRITING
+    WRITING = true
+    local ok = pcall(writefile, path, src)
+    WRITING = prev
+    return ok and path or nil
+end
+
+local LOADER_HOOKED = {}
+
+local function hookLoader(env, envName, fname)
+    local orig = rawget(env, fname)
+    if type(orig) ~= "function" then return end
+    if LOADER_HOOKED[orig] then return end
+    LOADER_HOOKED[orig] = true
+
+    local function wrapper(source, ...)
+        if type(source) == "string" and #source > 0 then
+            LAST_FULL = source
+            local path = saveStage(fname, source)
+            cap(
+                envName .. "." .. fname,
+                "TAMANHO: " .. #source .. " bytes"
+                .. (path and ("\nSALVO: " .. path) or "\nSAVE FALHOU (writefile off)")
+                .. "\nPRÉVIA:\n" .. source:sub(1, MAX_PREVIEW)
+            )
+        end
+        return orig(source, ...)
+    end
+
+    if type(hookfunction) == "function" then
+        local ok = pcall(hookfunction, orig, wrapper)
+        if ok then
+            cap("HOOK", envName .. "." .. fname .. " via hookfunction")
+            return
+        end
+    end
+    local ok = pcall(function() env[fname] = wrapper end)
+    cap("HOOK", envName .. "." .. fname .. (ok and " via substituição" or " FALHOU"))
+end
+
+for _, e in ipairs(ENVS) do
+    hookLoader(e.env, e.name, "loadstring")
+    hookLoader(e.env, e.name, "load")
+end
+
+-- ===== 6. esconde o hook do Luraph =====
+if type(debug) == "table" and type(debug.getinfo) == "function"
+    and type(hookfunction) == "function" then
+    pcall(function()
+        local realGetInfo = debug.getinfo
+        hookfunction(realGetInfo, function(level, what)
+            local info = realGetInfo(level, what)
+            if type(info) == "table" and info.func == loadstring then
+                info.what = "C"
+                info.source = "=[C]"
+                info.short_src = "[C]"
+            end
+            return info
+        end)
+        cap("HIDE", "debug.getinfo hookado — Luraph não detecta loadstring")
+    end)
+end
+
+cap("STATUS", "Pronto. Execute o script alvo agora.")
+refresh()
