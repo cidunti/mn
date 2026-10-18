@@ -1,9 +1,13 @@
 -- ============================================================
--- LOADER MONITOR v3 - tudo em um (hooks + salvamento + scan)
+-- LOADER MONITOR v4 - COMPLETO: hooks + loader + scan automático
 -- ============================================================
-print("[V3] Iniciando monitor...")
+print("[V4] Iniciando monitor completo...")
 
-if not isfolder("MonitorCaptures") then makefolder("MonitorCaptures") end
+-- limpa capturas antigas
+if isfolder and isfolder("MonitorCaptures") then
+    pcall(delfolder, "MonitorCaptures")
+end
+if isfolder then pcall(makefolder, "MonitorCaptures") end
 
 local logs = {}
 local counter = 0
@@ -11,7 +15,7 @@ local counter = 0
 local function log(t)
     t = tostring(t)
     table.insert(logs, t)
-    print("[V3] " .. t)
+    print("[V4] " .. t)
 end
 
 local function save(tag, content)
@@ -29,14 +33,6 @@ loadstring = function(src, chunk)
     log(">>> loadstring capturado! chunk=" .. tostring(chunk) .. " tamanho=" .. #tostring(src))
     save("loadstring", src)
     return oldLoad(src, chunk)
-end
-
--- ---------- HOOK: getgenv (pra detectar configs do loader) ----------
-local oldGetgenv = getgenv
-if oldGetgenv then
-    getgenv = function(...)
-        return oldGetgenv(...)
-    end
 end
 
 -- ---------- HOOK: game:HttpGet / HttpGetAsync ----------
@@ -83,7 +79,7 @@ if http_request then http_request = hookReq(http_request, "http_request") end
 if request then request = hookReq(request, "request") end
 if syn and syn.request then syn.request = hookReq(syn.request, "syn.request") end
 
--- ---------- HOOK: require (alguns loaders usam asset require) ----------
+-- ---------- HOOK: require ----------
 local oldRequire = require
 require = function(a)
     log("require -> " .. tostring(a))
@@ -92,51 +88,58 @@ require = function(a)
     return res
 end
 
-log("TODOS os hooks ativos. Rode o loader do Jujutsu AGORA.")
-log("Depois de completar a key e o menu abrir, rode o SCAN abaixo.")
+log("TODOS os hooks ativos. Executando o loader do Jujutsu em 3 segundos...")
 
--- ============================================================
--- SCAN: cole e rode esta parte DEPOIS que o menu abrir
--- (ou execute tudo junto e rode o scan por último)
--- ============================================================
-task.delay(30, function() -- auto-scan após 30s de cada captura
+-- ---------- EXECUTA O LOADER ----------
+task.delay(3, function()
+    local ok, err = pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/tricksyfishys/jujutsuer/refs/heads/main/main.lua"))()
+    end)
+    if not ok then
+        log("ERRO ao rodar o loader: " .. tostring(err))
+    else
+        log("loader executado. Complete a key e espere o menu abrir.")
+        log("O auto-scan roda 60 segundos depois. Ou rode scanAll() manualmente.")
+    end
 end)
 
+-- ---------- SCAN ----------
 local function scanAll()
     log("======== SCAN INICIADO ========")
-    if not isfolder("MonitorCaptures") then return end
-    local keywords = {"jujutsu", "Jujutsu", "shenanigans", "luarmor", "Luarmor",
-                      "LPH_", "Luraph", "luraph", "key", "whitelist", "hwid",
-                      "DomainExpansion", "BlackFlash", "loadstring", "getgenv"}
+    if not isfolder("MonitorCaptures") then
+        log("pasta MonitorCaptures não existe!")
+        return
+    end
+    local keywords = {"jujutsu","Jujutsu","shenanigans","luarmor","Luarmor","Lurarmor",
+                      "LPH_","Luraph","luraph","whitelist","hwid",
+                      "DomainExpansion","BlackFlash","loadstring","getgenv","key"}
     for _, file in listfiles("MonitorCaptures") do
         local name = tostring(file):match("[^/\\]+$")
         local ok, content = pcall(readfile, file)
         if ok and type(content) == "string" then
-            log("--- " .. name .. " (" .. #content .. " bytes) ---")
+            log("=== " .. name .. " (" .. #content .. " bytes) ===")
             local found = {}
             for _, kw in ipairs(keywords) do
                 local n = 0
                 for _ in content:gmatch(kw) do n += 1 end
                 if n > 0 then table.insert(found, kw .. "=" .. n) end
             end
-            if #found > 0 then
-                log("keywords: " .. table.concat(found, ", "))
-            else
-                log("nenhuma keyword relevante")
-            end
+            log("keywords: " .. (#found > 0 and table.concat(found, ", ") or "nenhuma"))
             log("INÍCIO: " .. content:sub(1, 300):gsub("[\r\n]+", " "))
             log("FIM: " .. content:sub(-300):gsub("[\r\n]+", " "))
         end
     end
     log("======== SCAN FINALIZADO ========")
-    log(">>> Agora copie TUDO do console e envie pro chat.")
     pcall(function()
         setclipboard(table.concat(logs, "\n"))
-        log("logs completos copiados pro clipboard também")
+        log(">>> TODOS os logs copiados pro clipboard! Cole aqui no chat.")
     end)
 end
 
--- registra comando global: rode scanAll() no console quando quiser
 getgenv().scanAll = scanAll
 
-log("Quando o menu abrir, execute: scanAll()")
+-- auto-scan 60s depois da execução do loader
+task.delay(63, function()
+    log("AUTO-SCAN disparado (60s após o loader).")
+    scanAll()
+end)
