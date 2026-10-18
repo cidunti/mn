@@ -1,93 +1,78 @@
--- Loader Monitor v2 - salva capturas em arquivos
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "LoaderMonitorV2"
-ScreenGui.ResetOnSpawn = false
-pcall(function() ScreenGui.Parent = gethui and gethui() or game:GetService("CoreGui") end)
+-- ============================================================
+-- LOADER MONITOR v3 - tudo em um (hooks + salvamento + scan)
+-- ============================================================
+print("[V3] Iniciando monitor...")
 
-local Frame = Instance.new("Frame")
-Frame.Size = UDim2.new(0, 420, 0, 220)
-Frame.Position = UDim2.new(0, 20, 0, 120)
-Frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-Frame.Active = true
-Frame.Draggable = true
-Frame.Parent = ScreenGui
-
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 26)
-Title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-Title.Text = "Loader Monitor v2 (arraste)"
-Title.TextColor3 = Color3.new(1, 1, 1)
-Title.Parent = Frame
-
-local LogBox = Instance.new("ScrollingFrame")
-LogBox.Position = UDim2.new(0, 6, 0, 30)
-LogBox.Size = UDim2.new(1, -12, 1, -70)
-LogBox.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
-LogBox.Parent = Frame
-
-local UIList = Instance.new("UIListLayout")
-UIList.SortOrder = Enum.SortOrder.LayoutOrder
-UIList.Parent = LogBox
-
-local CopyBtn = Instance.new("TextButton")
-CopyBtn.Size = UDim2.new(0, 130, 0, 28)
-CopyBtn.Position = UDim2.new(0, 6, 1, -34)
-CopyBtn.Text = "Copiar Tudo"
-CopyBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 60)
-CopyBtn.TextColor3 = Color3.new(1, 1, 1)
-CopyBtn.Parent = Frame
+if not isfolder("MonitorCaptures") then makefolder("MonitorCaptures") end
 
 local logs = {}
 local counter = 0
 
-local function log(txt)
-    txt = tostring(txt)
-    table.insert(logs, txt)
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -8, 0, 20)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = txt:sub(1, 150)
-    lbl.TextColor3 = Color3.fromRGB(0, 255, 120)
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Text = txt
-    lbl.Parent = LogBox
+local function log(t)
+    t = tostring(t)
+    table.insert(logs, t)
+    print("[V3] " .. t)
 end
 
-local function saveCapture(tag, content)
-    if not (writefile and isfolder) then return end
+local function save(tag, content)
+    if not writefile then return end
     counter += 1
-    pcall(function()
-        if not isfolder("MonitorCaptures") then makefolder("MonitorCaptures") end
-        local path = ("MonitorCaptures/%02d_%s.lua"):format(counter, tag)
-        writefile(path, tostring(content))
-        log("SALVO: " .. path .. " (" .. #tostring(content) .. " bytes)")
-    end)
+    local name = ("MonitorCaptures/capture_%02d_%s.lua"):format(counter, tag)
+    pcall(writefile, name, tostring(content))
+    log("SALVO: " .. name .. " (" .. #tostring(content) .. " bytes)")
+    return name
 end
 
-CopyBtn.MouseButton1Click:Connect(function()
-    pcall(setclipboard or toclipboard, table.concat(logs, "\n"))
-    log(">>> Copiado!")
-end)
-
--- Hook loadstring: captura o código REAL no momento da execução
+-- ---------- HOOK: loadstring ----------
 local oldLoad = loadstring
 loadstring = function(src, chunk)
-    saveCapture("loadstring", src)
-    log("loadstring capturado (" .. #tostring(src) .. " bytes) chunk=" .. tostring(chunk))
+    log(">>> loadstring capturado! chunk=" .. tostring(chunk) .. " tamanho=" .. #tostring(src))
+    save("loadstring", src)
     return oldLoad(src, chunk)
 end
 
--- Hook HttpGet genérico (request / syn.request / http_request)
+-- ---------- HOOK: getgenv (pra detectar configs do loader) ----------
+local oldGetgenv = getgenv
+if oldGetgenv then
+    getgenv = function(...)
+        return oldGetgenv(...)
+    end
+end
+
+-- ---------- HOOK: game:HttpGet / HttpGetAsync ----------
+local mt = getrawmetatable(game)
+local oldIdx = mt.__index
+setreadonly(mt, false)
+mt.__index = function(t, k)
+    if t == game and (k == "HttpGet" or k == "HttpGetAsync") then
+        local real = oldIdx(t, k)
+        return function(self, url, ...)
+            log(k .. " -> " .. tostring(url))
+            local ok, res = pcall(real, self, url, ...)
+            if ok and type(res) == "string" then
+                save("get", res)
+                log("resposta (" .. #res .. " bytes) salva")
+            end
+            if not ok then error(res) end
+            return res
+        end
+    end
+    return oldIdx(t, k)
+end
+setreadonly(mt, true)
+
+-- ---------- HOOK: http_request / request / syn.request ----------
 local function hookReq(fn, name)
-    return function(...)
-        local args = {...}
-        local url = type(args[1]) == "table" and args[1].Url or args[1]
+    return function(req)
+        local url = type(req) == "table" and req.Url or req
         log(name .. " -> " .. tostring(url))
-        local ok, res = pcall(fn, ...)
-        if ok and type(res) == "table" and res.Body then
-            saveCapture("http_" .. tostring(url):match("[%w%.%-]+$") or "resp", res.Body)
-        elseif ok and type(res) == "string" then
-            saveCapture("http_resp", res)
+        local ok, res = pcall(fn, req)
+        if ok then
+            local body = type(res) == "table" and res.Body or res
+            if type(body) == "string" then
+                log("resposta: " .. body:sub(1, 400))
+                save("req_" .. tostring(url):gsub("[^%w]", "_"):sub(-30), body)
+            end
         end
         if not ok then error(res) end
         return res
@@ -98,25 +83,60 @@ if http_request then http_request = hookReq(http_request, "http_request") end
 if request then request = hookReq(request, "request") end
 if syn and syn.request then syn.request = hookReq(syn.request, "syn.request") end
 
--- Hook game:HttpGet com resposta completa salva
-local mt = getrawmetatable(game)
-local oldIdx = mt.__index
-setreadonly(mt, false)
-mt.__index = function(t, k)
-    if k == "HttpGet" and t == game then
-        return function(self, url, cache)
-            log("HttpGet -> " .. tostring(url))
-            local ok, res = pcall(oldIdx(t, k), t, url, cache)
-            if ok and type(res) == "string" then
-                saveCapture("get", res)
+-- ---------- HOOK: require (alguns loaders usam asset require) ----------
+local oldRequire = require
+require = function(a)
+    log("require -> " .. tostring(a))
+    local ok, res = pcall(oldRequire, a)
+    if not ok then error(res) end
+    return res
+end
+
+log("TODOS os hooks ativos. Rode o loader do Jujutsu AGORA.")
+log("Depois de completar a key e o menu abrir, rode o SCAN abaixo.")
+
+-- ============================================================
+-- SCAN: cole e rode esta parte DEPOIS que o menu abrir
+-- (ou execute tudo junto e rode o scan por último)
+-- ============================================================
+task.delay(30, function() -- auto-scan após 30s de cada captura
+end)
+
+local function scanAll()
+    log("======== SCAN INICIADO ========")
+    if not isfolder("MonitorCaptures") then return end
+    local keywords = {"jujutsu", "Jujutsu", "shenanigans", "luarmor", "Luarmor",
+                      "LPH_", "Luraph", "luraph", "key", "whitelist", "hwid",
+                      "DomainExpansion", "BlackFlash", "loadstring", "getgenv"}
+    for _, file in listfiles("MonitorCaptures") do
+        local name = tostring(file):match("[^/\\]+$")
+        local ok, content = pcall(readfile, file)
+        if ok and type(content) == "string" then
+            log("--- " .. name .. " (" .. #content .. " bytes) ---")
+            local found = {}
+            for _, kw in ipairs(keywords) do
+                local n = 0
+                for _ in content:gmatch(kw) do n += 1 end
+                if n > 0 then table.insert(found, kw .. "=" .. n) end
             end
-            if not ok then error(res) end
-            return res
+            if #found > 0 then
+                log("keywords: " .. table.concat(found, ", "))
+            else
+                log("nenhuma keyword relevante")
+            end
+            log("INÍCIO: " .. content:sub(1, 300):gsub("[\r\n]+", " "))
+            log("FIM: " .. content:sub(-300):gsub("[\r\n]+", " "))
         end
     end
-    return oldIdx(t, k)
+    log("======== SCAN FINALIZADO ========")
+    log(">>> Agora copie TUDO do console e envie pro chat.")
+    pcall(function()
+        setclipboard(table.concat(logs, "\n"))
+        log("logs completos copiados pro clipboard também")
+    end)
 end
-setreadonly(mt, true)
 
-log("Monitor v2 ativo. Rode o loader e complete a key.")
-log("Arquivos salvos em: MonitorCaptures/")
+-- registra comando global: rode scanAll() no console quando quiser
+getgenv().scanAll = scanAll
+
+log("Quando o menu abrir, execute: scanAll()")
