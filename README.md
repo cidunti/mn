@@ -1,103 +1,122 @@
--- ============================================================
--- MONITOR ANTI-CRASH FINAL (Captura + Bloqueia Fechamento)
--- ============================================================
-local Players = game:GetService("Players")
-local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+-- Loader Monitor v2 - salva capturas em arquivos
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "LoaderMonitorV2"
+ScreenGui.ResetOnSpawn = false
+pcall(function() ScreenGui.Parent = gethui and gethui() or game:GetService("CoreGui") end)
 
-local CAPTURED = false
+local Frame = Instance.new("Frame")
+Frame.Size = UDim2.new(0, 420, 0, 220)
+Frame.Position = UDim2.new(0, 20, 0, 120)
+Frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+Frame.Active = true
+Frame.Draggable = true
+Frame.Parent = ScreenGui
 
--- ===== GUI =====
-local gui = Instance.new("ScreenGui", playerGui)
-gui.Name = "AntiCrashMonitor"
-gui.DisplayOrder = 999
-gui.IgnoreGuiInset = true
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 26)
+Title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+Title.Text = "Loader Monitor v2 (arraste)"
+Title.TextColor3 = Color3.new(1, 1, 1)
+Title.Parent = Frame
 
-local frm = Instance.new("Frame", gui)
-frm.Size = UDim2.new(0, 320, 0, 150)
-frm.Position = UDim2.new(0.5, -160, 0.5, -75)
-frm.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-frm.BorderSizePixel = 0
-frm.Active = true
-frm.Draggable = true
-Instance.new("UICorner", frm).CornerRadius = UDim.new(0, 8)
+local LogBox = Instance.new("ScrollingFrame")
+LogBox.Position = UDim2.new(0, 6, 0, 30)
+LogBox.Size = UDim2.new(1, -12, 1, -70)
+LogBox.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+LogBox.Parent = Frame
 
-local title = Instance.new("TextLabel", frm)
-title.Size = UDim2.new(1, -20, 0, 30)
-title.Position = UDim2.new(0, 10, 0, 5)
-title.BackgroundTransparency = 1
-title.Text = "Anti-Crash Ativo"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 12
-title.TextXAlignment = Enum.TextXAlignment.Left
+local UIList = Instance.new("UIListLayout")
+UIList.SortOrder = Enum.SortOrder.LayoutOrder
+UIList.Parent = LogBox
 
-local info = Instance.new("TextLabel", frm)
-info.Size = UDim2.new(1, -20, 0, 50)
-info.Position = UDim2.new(0, 10, 0, 35)
-info.BackgroundTransparency = 1
-info.Text = "Proteção contra 'game:Shutdown' ligada.\nExecute o script Luraph agora."
-info.TextColor3 = Color3.fromRGB(200, 230, 200)
-info.Font = Enum.Font.Code
-info.TextSize = 10
-info.TextWrapped = true
-info.TextXAlignment = Enum.TextXAlignment.Left
+local CopyBtn = Instance.new("TextButton")
+CopyBtn.Size = UDim2.new(0, 130, 0, 28)
+CopyBtn.Position = UDim2.new(0, 6, 1, -34)
+CopyBtn.Text = "Copiar Tudo"
+CopyBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 60)
+CopyBtn.TextColor3 = Color3.new(1, 1, 1)
+CopyBtn.Parent = Frame
 
-local btnCopy = Instance.new("TextButton", frm)
-btnCopy.Size = UDim2.new(1, -20, 0, 30)
-btnCopy.Position = UDim2.new(0, 10, 1, -40)
-btnCopy.BackgroundColor3 = Color3.fromRGB(60, 170, 90)
-btnCopy.Text = "Copiar Código (Se capturado)"
-btnCopy.TextColor3 = Color3.new(1, 1, 1)
-btnCopy.Font = Enum.Font.GothamBold
-btnCopy.TextSize = 11
-Instance.new("UICorner", btnCopy).CornerRadius = UDim.new(0, 4)
+local logs = {}
+local counter = 0
 
-btnCopy.MouseButton1Click:Connect(function()
-    if CAPTURED then
-        btnCopy.Text = "Já copiado automaticamente!"
-    else
-        btnCopy.Text = "Nada capturado ainda."
-    end
-    task.delay(2, function() if btnCopy.Parent then btnCopy.Text = "Copiar Código (Se capturado)" end end)
+local function log(txt)
+    txt = tostring(txt)
+    table.insert(logs, txt)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -8, 0, 20)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = txt:sub(1, 150)
+    lbl.TextColor3 = Color3.fromRGB(0, 255, 120)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = txt
+    lbl.Parent = LogBox
+end
+
+local function saveCapture(tag, content)
+    if not (writefile and isfolder) then return end
+    counter += 1
+    pcall(function()
+        if not isfolder("MonitorCaptures") then makefolder("MonitorCaptures") end
+        local path = ("MonitorCaptures/%02d_%s.lua"):format(counter, tag)
+        writefile(path, tostring(content))
+        log("SALVO: " .. path .. " (" .. #tostring(content) .. " bytes)")
+    end)
+end
+
+CopyBtn.MouseButton1Click:Connect(function()
+    pcall(setclipboard or toclipboard, table.concat(logs, "\n"))
+    log(">>> Copiado!")
 end)
 
--- ===== 1. ANTI-CRASH =====
-local function hookCrashMethod(obj, methodName)
-    if type(obj) == "userdata" or type(obj) == "table" then
-        pcall(function()
-            local old = obj[methodName]
-            if type(old) == "function" then
-                obj[methodName] = function(...) 
-                    info.Text = "🚫 Tentativa de crash bloqueada: " .. methodName
-                    info.TextColor3 = Color3.fromRGB(255, 100, 100)
-                end
-            end
-        end)
-    end
-end
-
--- Bloqueia os métodos comuns de fechar o jogo
-hookCrashMethod(game, "Shutdown")
-hookCrashMethod(game, "Destroy")
-pcall(function() os.exit = function() end end)
-pcall(function() game:GetService("Players").LocalPlayer:Kick = function() end end)
-
--- ===== 2. CAPTURA DO LOADSTRING =====
+-- Hook loadstring: captura o código REAL no momento da execução
 local oldLoad = loadstring
-loadstring = function(src, chunkname)
-    if type(src) == "string" and #src > 5000 then
-        CAPTURED = true
-        if type(setclipboard) == "function" then
-            pcall(setclipboard, src)
-        end
-        info.Text = "✅ CÓDIGO CAPTURADO! Tamanho: " .. #src .. " bytes.\nJÁ ESTÁ NO SEU CTRL+V!"
-        info.TextColor3 = Color3.fromRGB(0, 255, 0)
-    end
-    return oldLoad(src, chunkname)
+loadstring = function(src, chunk)
+    saveCapture("loadstring", src)
+    log("loadstring capturado (" .. #tostring(src) .. " bytes) chunk=" .. tostring(chunk))
+    return oldLoad(src, chunk)
 end
 
--- ===== 3. BLOQUEIO DE LOOP INFINITO =====
-local oldWait = task.wait
-task.wait = function(t)
-    return oldWait(math.min(t or 0.03, 0.03)) -- Força o yield para não travar o Roblox
+-- Hook HttpGet genérico (request / syn.request / http_request)
+local function hookReq(fn, name)
+    return function(...)
+        local args = {...}
+        local url = type(args[1]) == "table" and args[1].Url or args[1]
+        log(name .. " -> " .. tostring(url))
+        local ok, res = pcall(fn, ...)
+        if ok and type(res) == "table" and res.Body then
+            saveCapture("http_" .. tostring(url):match("[%w%.%-]+$") or "resp", res.Body)
+        elseif ok and type(res) == "string" then
+            saveCapture("http_resp", res)
+        end
+        if not ok then error(res) end
+        return res
+    end
 end
+
+if http_request then http_request = hookReq(http_request, "http_request") end
+if request then request = hookReq(request, "request") end
+if syn and syn.request then syn.request = hookReq(syn.request, "syn.request") end
+
+-- Hook game:HttpGet com resposta completa salva
+local mt = getrawmetatable(game)
+local oldIdx = mt.__index
+setreadonly(mt, false)
+mt.__index = function(t, k)
+    if k == "HttpGet" and t == game then
+        return function(self, url, cache)
+            log("HttpGet -> " .. tostring(url))
+            local ok, res = pcall(oldIdx(t, k), t, url, cache)
+            if ok and type(res) == "string" then
+                saveCapture("get", res)
+            end
+            if not ok then error(res) end
+            return res
+        end
+    end
+    return oldIdx(t, k)
+end
+setreadonly(mt, true)
+
+log("Monitor v2 ativo. Rode o loader e complete a key.")
+log("Arquivos salvos em: MonitorCaptures/")
